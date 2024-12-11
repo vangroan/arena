@@ -24,7 +24,7 @@ pub enum Entry<T> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Index {
     generation: NonZeroUsize,
-    position: usize,
+    slot: usize,
 }
 
 impl<T> Arena<T> {
@@ -52,9 +52,8 @@ impl<T> Arena<T> {
     ///
     /// ```
     /// # use arena::Arena;
-    /// # struct GameObject { position: [f32; 2] };
-    /// # let mut arena = Arena::<GameObject>::new();
-    /// let index = arena.push(GameObject { position: [2.5, 3.5] });
+    /// # let mut arena = Arena::new();
+    /// let index = arena.push("Foo");
     /// # assert!(!arena.is_empty());
     /// # assert_eq!(arena.len(), 1);
     ///
@@ -67,10 +66,10 @@ impl<T> Arena<T> {
     ///
     /// Panics if `index` is out of bounds.
     pub fn remove(&mut self, index: Index) {
-        if let Entry::Occupied { generation, .. } = &self.data[index.position] {
+        if let Entry::Occupied { generation, .. } = &self.data[index.slot] {
             if index.generation == *generation {
-                self.data[index.position] = Entry::Vacant { next: self.free_head };
-                self.free_head = Some(index.position);
+                self.data[index.slot] = Entry::Vacant { next: self.free_head };
+                self.free_head = Some(index.slot);
                 self.generation = self.generation.saturating_add(1);
                 self.count -= 1;
             }
@@ -81,11 +80,10 @@ impl<T> Arena<T> {
     ///
     /// ```
     /// # use arena::Arena;
-    /// # struct GameObject { position: [f32; 2] };
-    /// # let mut arena = Arena::<GameObject>::new();
-    /// let index = arena.insert(GameObject { position: [2.0, 3.0] });
+    /// # let mut arena = Arena::new();
+    /// let index = arena.insert("Foo");
     /// let object = arena.take(index).unwrap();
-    /// # assert_eq!(object.position, [2.0, 3.0]);
+    /// # assert_eq!(object, "Foo");
     /// # assert_eq!(arena.len(), 0);
     /// # assert!(arena.get(index).is_none());
     /// ```
@@ -94,7 +92,7 @@ impl<T> Arena<T> {
     ///
     /// Panics if `index` is out of bounds.
     pub fn take(&mut self, index: Index) -> Option<T> {
-        let entry = &mut self.data[index.position];
+        let entry = &mut self.data[index.slot];
 
         if entry.is_occupied() {
             let original = std::mem::replace(entry, Entry::Vacant { next: self.free_head });
@@ -112,22 +110,18 @@ impl<T> Arena<T> {
         let pos = self.data.len();
         self.data.push(Entry::Occupied { generation, item });
         self.count += 1;
-        Index {
-            generation,
-            position: pos,
-        }
+        Index { generation, slot: pos }
     }
 
     /// Insert the item into the first free slot.
     ///
     /// ```
     /// # use arena::Arena;
-    /// # #[derive(Default)] struct GameObject { position: [f32; 2] };
-    /// # let mut arena = Arena::<GameObject>::new();
-    /// # let index0 = arena.push(GameObject::default());
-    /// # let index1 = arena.push(GameObject::default());
+    /// # let mut arena = Arena::new();
+    /// # let index0 = arena.push("Foo");
+    /// # let index1 = arena.push("Bar");
     /// # arena.remove(index0);
-    /// let index = arena.insert(GameObject { position: [4.0, 8.0] });
+    /// let index = arena.insert("Foo");
     /// # assert_ne!(index, index0);
     /// # assert_eq!(arena.len(), 2);
     /// ```
@@ -137,10 +131,7 @@ impl<T> Arena<T> {
                 let generation = self.generation;
                 self.data[pos] = Entry::Occupied { generation, item };
                 self.count += 1;
-                Index {
-                    generation,
-                    position: pos,
-                }
+                Index { generation, slot: pos }
             }
             None => self.push(item),
         }
@@ -148,32 +139,55 @@ impl<T> Arena<T> {
 
     /// Set the item at the given `index`.
     ///
-    /// Optionally returns the existing item if the
+    /// Returns an index for the new generation, and
+    /// optionally returns the existing item if the
     /// slot is occupied.
+    ///
+    /// ```
+    /// # use arena::Arena;
+    /// # let mut arena = Arena::new();
+    /// let index0 = arena.insert("Foo");
+    /// let (index1, original) = arena.replace(index0, "Bar");
+    ///
+    /// assert_eq!(original, Some("Foo"));
+    /// assert_eq!(arena.get(index0), None);
+    /// assert_eq!(arena.get(index1), Some(&"Bar"));
+    /// # assert_eq!(arena.len(), 1);
+    /// ```
     ///
     /// # Panic
     ///
     /// Panics if `index` is out of bounds.
-    pub fn replace(&mut self, index: Index, item: T) -> Option<T> {
-        let entry = &mut self.data[index.position];
+    pub fn replace(&mut self, index: Index, item: T) -> (Index, Option<T>) {
+        let entry = &mut self.data[index.slot];
 
         if entry.is_occupied() {
             let generation = self.generation.saturating_add(1);
             let original = std::mem::replace(entry, Entry::Occupied { generation, item });
             self.generation = generation;
-            Some(original.unwrap_occupied().1)
+            (
+                Index {
+                    generation,
+                    slot: index.slot,
+                },
+                Some(original.unwrap_occupied().1),
+            )
         } else {
-            *entry = Entry::Occupied {
-                generation: self.generation,
-                item,
-            };
+            let generation = self.generation;
+            *entry = Entry::Occupied { generation, item };
             self.count += 1;
-            None
+            (
+                Index {
+                    generation,
+                    slot: index.slot,
+                },
+                None,
+            )
         }
     }
 
     pub fn set(&mut self, index: Index, item: T) {
-        let entry = &mut self.data[index.position];
+        let entry = &mut self.data[index.slot];
 
         if entry.is_occupied() {
             let generation = self.generation.saturating_add(1);
@@ -200,7 +214,7 @@ impl<T> Arena<T> {
     /// # assert_eq!(object.position, [2.0, 3.0]);
     /// ```
     pub fn get(&self, index: Index) -> Option<&T> {
-        if let Some(Entry::Occupied { generation, item }) = self.data.get(index.position) {
+        if let Some(Entry::Occupied { generation, item }) = self.data.get(index.slot) {
             if index.generation == *generation {
                 return Some(item);
             }
@@ -224,7 +238,7 @@ impl<T> Arena<T> {
     /// # assert_eq!(arena.get_mut(index).unwrap().position, [7.0, 11.0])
     /// ```
     pub fn get_mut(&mut self, index: Index) -> Option<&mut T> {
-        if let Some(Entry::Occupied { generation, item }) = self.data.get_mut(index.position) {
+        if let Some(Entry::Occupied { generation, item }) = self.data.get_mut(index.slot) {
             if index.generation == *generation {
                 return Some(item);
             }
@@ -236,8 +250,20 @@ impl<T> Arena<T> {
     /// # Panic
     ///
     /// Panics if the two indices point to the same slot.
-    pub fn get2_mut(&mut self, _a: Index, _b: Index) -> (Option<&mut T>, Option<&mut T>) {
-        todo!()
+    pub fn get2_mut(&mut self, a: Index, b: Index) -> (Option<&mut T>, Option<&mut T>) {
+        assert_ne!(a.slot, b.slot);
+
+        // SAFETY: The indices are checked so they don't return
+        //         mutable references to the same item.
+        //         The returned values' lifetimes are bound to the
+        //         Arena's lifetime via &self, so no further mutations
+        //         can occur on the internal data storage.
+        unsafe {
+            // erase lifetime
+            let this = self as *mut Self;
+
+            ((*this).get_mut(a), (*this).get_mut(b))
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -287,7 +313,7 @@ impl Index {
     #[allow(dead_code)]
     pub(crate) fn from_parts(pos: usize, gen: NonZeroUsize) -> Self {
         Index {
-            position: pos,
+            slot: pos,
             generation: gen,
         }
     }
