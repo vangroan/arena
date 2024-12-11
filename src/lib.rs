@@ -1,7 +1,7 @@
 //! Generations use [`NonZeroUsize`] to reduce the size of `Option<Index>`.
 use std::iter::Iterator;
 use std::num::NonZeroUsize;
-use std::slice::Iter as SliceIter;
+use std::slice::{Iter as SliceIter, IterMut as SliceIterMut};
 
 #[cfg(test)]
 mod tests;
@@ -279,6 +279,26 @@ impl<T> Arena<T> {
             inner: self.data.iter(),
         }
     }
+
+    /// Iterate the items in the arena mutably.
+    ///
+    /// ```
+    /// # use arena::Arena;
+    /// # let mut arena = Arena::new();
+    /// let index0 = arena.insert("Foo");
+    /// let index1 = arena.insert("Bar");
+    ///
+    /// for item in arena.iter_mut() {
+    ///     *item = "Baz";
+    /// }
+    /// # assert_eq!(arena.get(index0), Some(&"Baz"));
+    /// # assert_eq!(arena.get(index1), Some(&"Baz"));
+    /// ```
+    pub fn iter_mut(&mut self) -> IterMut<T> {
+        IterMut {
+            inner: self.data.iter_mut(),
+        }
+    }
 }
 
 impl<T> Default for Arena<T> {
@@ -329,6 +349,26 @@ pub struct Iter<'a, T> {
 
 impl<'a, T> Iterator for Iter<'a, T> {
     type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for entry in self.inner.by_ref() {
+            match entry {
+                Entry::Vacant { .. } => continue,
+                Entry::Occupied { item, .. } => return Some(item),
+            }
+        }
+
+        None
+    }
+}
+
+#[derive(Debug)]
+pub struct IterMut<'a, T> {
+    inner: SliceIterMut<'a, Entry<T>>,
+}
+
+impl<'a, T> Iterator for IterMut<'a, T> {
+    type Item = &'a mut T;
 
     fn next(&mut self) -> Option<Self::Item> {
         for entry in self.inner.by_ref() {
