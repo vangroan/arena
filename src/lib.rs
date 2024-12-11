@@ -94,16 +94,16 @@ impl<T> Arena<T> {
     ///
     /// Panics if `index` is out of bounds.
     pub fn take(&mut self, index: Index) -> Option<T> {
-        self.data.get_mut(index.position).and_then(|entry| {
-            if entry.is_occupied() {
-                let original = std::mem::replace(entry, Entry::Vacant { next: self.free_head });
-                self.generation = self.generation.saturating_add(1);
-                self.count -= 1;
-                Some(original.unwrap_occupied().1)
-            } else {
-                None
-            }
-        })
+        let entry = &mut self.data[index.position];
+
+        if entry.is_occupied() {
+            let original = std::mem::replace(entry, Entry::Vacant { next: self.free_head });
+            self.generation = self.generation.saturating_add(1);
+            self.count -= 1;
+            Some(original.unwrap_occupied().1)
+        } else {
+            None
+        }
     }
 
     /// Appends the item to the end of the arena.
@@ -154,9 +154,38 @@ impl<T> Arena<T> {
     /// # Panic
     ///
     /// Panics if `index` is out of bounds.
-    pub fn set(&mut self, _index: Index, _item: T) -> Option<T> {
-        // if let Some(Entry::Occupied { item, .. }) = self.data[]
-        todo!()
+    pub fn replace(&mut self, index: Index, item: T) -> Option<T> {
+        let entry = &mut self.data[index.position];
+
+        if entry.is_occupied() {
+            let generation = self.generation.saturating_add(1);
+            let original = std::mem::replace(entry, Entry::Occupied { generation, item });
+            self.generation = generation;
+            Some(original.unwrap_occupied().1)
+        } else {
+            *entry = Entry::Occupied {
+                generation: self.generation,
+                item,
+            };
+            self.count += 1;
+            None
+        }
+    }
+
+    pub fn set(&mut self, index: Index, item: T) {
+        let entry = &mut self.data[index.position];
+
+        if entry.is_occupied() {
+            let generation = self.generation.saturating_add(1);
+            let _ = std::mem::replace(entry, Entry::Occupied { generation, item });
+            self.generation = generation;
+        } else {
+            *entry = Entry::Occupied {
+                generation: self.generation,
+                item,
+            };
+            self.count += 1;
+        }
     }
 
     /// Return a reference to the item at the given `index`.
