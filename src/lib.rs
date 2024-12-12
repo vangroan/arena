@@ -96,6 +96,7 @@ impl<T> Arena<T> {
 
         if entry.is_occupied() {
             let original = std::mem::replace(entry, Entry::Vacant { next: self.free_head });
+            self.free_head = Some(index.slot);
             self.generation = self.generation.saturating_add(1);
             self.count -= 1;
             Some(original.unwrap_occupied().1)
@@ -329,12 +330,12 @@ impl<T> Entry<T> {
     }
 }
 
+#[allow(dead_code)]
 impl Index {
-    #[allow(dead_code)]
-    pub(crate) fn from_parts(pos: usize, gen: NonZeroUsize) -> Self {
+    pub(crate) fn from_parts(slot: usize, gen: usize) -> Self {
         Index {
-            slot: pos,
-            generation: gen,
+            slot,
+            generation: NonZeroUsize::new(gen).unwrap(),
         }
     }
 }
